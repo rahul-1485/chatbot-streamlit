@@ -39,14 +39,26 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # Get Groq API key from secrets or environment
-try:
-    GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", os.getenv("GROQ_API_KEY"))
-except:
-    GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+def get_groq_api_key():
+    try:
+        return st.secrets["GROQ_API_KEY"]
+    except:
+        return os.getenv("GROQ_API_KEY")
+
+GROQ_API_KEY = get_groq_api_key()
+
+if not GROQ_API_KEY:
+    st.error("⚠️ Groq API key not found!")
+    st.info("Create .streamlit/secrets.toml with:\nGROQ_API_KEY = \"your-api-key\"")
+    st.stop()
 
 # Initialize session state
 if "messages" not in st.session_state:
     st.session_state.messages = []
+if "last_input" not in st.session_state:
+    st.session_state.last_input = None
+if "processing" not in st.session_state:
+    st.session_state.processing = False
 
 if "groq_client" not in st.session_state:
     if GROQ_API_KEY:
@@ -185,67 +197,53 @@ else:
                 unsafe_allow_html=True
             )
 
-    # Chat input
+    # Chat input and processing
     user_input = st.chat_input("Type your message here... ⚡")
 
-    if user_input:
-        if not st.session_state.get("model_loaded"):
-            st.error("Please configure Groq API key first.")
-        else:
+    if user_input and not st.session_state.processing and user_input != st.session_state.last_input:
+        try:
+            st.session_state.processing = True
+            st.session_state.last_input = user_input
+            
             # Add user message to chat
             st.session_state.messages.append({
                 "role": "user",
                 "content": user_input
             })
             
-            # Display user message immediately
-            st.markdown(
-                f'<div class="chat-message user-message"><b>You:</b><br>{user_input}</div>', 
-                unsafe_allow_html=True
-            )
-            
-            # Show loading spinner while getting response
             with st.spinner("Thinking... ⚡"):
-                try:
-                    # Prepare messages for Groq API
-                    api_messages = [
-                        {
-                            "role": "system",
-                            "content": "You are a helpful AI assistant. Provide clear, concise, and friendly responses."
-                        }
-                    ]
-                    
-                    # Add conversation history (last 10 messages for context)
-                    for msg in st.session_state.messages[-10:]:
-                        api_messages.append({
-                            "role": msg["role"],
-                            "content": msg["content"]
-                        })
-                    
-                    # Get response from Groq
-                    chat_completion = st.session_state.groq_client.chat.completions.create(
-                        messages=api_messages,
-                        model=GROQ_MODELS[st.session_state.selected_model],
-                        temperature=temperature,
-                        max_tokens=max_tokens,
-                        top_p=1,
-                        stream=False
-                    )
-                    
-                    response_content = chat_completion.choices[0].message.content
-                    
-                    # Add assistant response to chat
-                    st.session_state.messages.append({
-                        "role": "assistant",
-                        "content": response_content
-                    })
-                    
-                    st.rerun()
-                    
-                except Exception as e:
-                    st.error(f"Error: {str(e)}")
-                    # Remove the user message if request failed
-                    st.session_state.messages.pop()
+                # Prepare messages for Groq API
+                api_messages = [
+                    {
+                        "role": "system",
+                        "content": "You are a helpful AI assistant. Provide clear, concise, and friendly responses."
+                    }
+                ]
+                api_messages.extend(st.session_state.messages[-10:])
+                
+                # Get response from Groq
+                chat_completion = st.session_state.groq_client.chat.completions.create(
+                    messages=api_messages,
+                    model=GROQ_MODELS[st.session_state.selected_model],
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    top_p=1,
+                    stream=False
+                )
+                
+                # Add assistant response to chat
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": chat_completion.choices[0].message.content
+                })
+                
+        except Exception as e:
+            st.error(f"Error: {str(e)}")
+            if st.session_state.messages:
+                st.session_state.messages.pop()  # Remove failed message
+        finally:
+            st.session_state.processing = False
+            st.rerun()
 
 # Footer
 st.markdown("---")
